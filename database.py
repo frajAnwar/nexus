@@ -75,24 +75,6 @@ def initialize_database():
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )''')
         
-        # Marketplace table
-        c.execute('''CREATE TABLE IF NOT EXISTS marketplace (
-            listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            seller_id INTEGER NOT NULL,
-            item_id INTEGER NOT NULL,
-            quantity INTEGER NOT NULL,
-            price INTEGER NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )''')
-        
-        # Global shop table
-        c.execute('''CREATE TABLE IF NOT EXISTS global_shop (
-            item_id INTEGER PRIMARY KEY,
-            price INTEGER,
-            stock INTEGER DEFAULT -1,
-            FOREIGN KEY(item_id) REFERENCES items(item_id)
-        )''')
-        
         # Insert default items
         default_items = [
             ("Wooden Sword", "Basic training weapon", 10, "https://i.imgur.com/3sT7VQj.png", "common", 0.3, 1),
@@ -111,20 +93,6 @@ def initialize_database():
         
         c.executemany('''INSERT OR IGNORE INTO items (name, description, value, image_url, rarity, drop_rate, min_level)
                       VALUES (?, ?, ?, ?, ?, ?, ?)''', default_items)
-        
-        # Add items to global shop
-        shop_items = [
-            ("Stamina Potion", 50, 100),
-            ("Health Potion", 30, 200),
-            ("Dungeon Key", 150, 50)
-        ]
-        
-        for name, price, stock in shop_items:
-            c.execute("SELECT item_id FROM items WHERE name = ?", (name,))
-            item_id = c.fetchone()
-            if item_id:
-                c.execute('''INSERT OR IGNORE INTO global_shop (item_id, price, stock)
-                          VALUES (?, ?, ?)''', (item_id[0], price, stock))
 
 # Player operations
 def create_player(user_id, username):
@@ -164,10 +132,6 @@ def add_xp(user_id, amount):
             return new_level, coin_reward
         
         return new_level, 0
-
-def add_coins(user_id, amount):
-    with Database() as c:
-        c.execute("UPDATE players SET coins = coins + ? WHERE user_id = ?", (amount, user_id))
 
 def regenerate_stamina():
     current_time = datetime.now()
@@ -222,15 +186,6 @@ def add_item_to_inventory(user_id, item_id, quantity=1):
                   VALUES (?, ?, ?)''', (user_id, item_id, quantity))
         c.execute('''UPDATE inventory SET quantity = quantity + ?
                   WHERE user_id = ? AND item_id = ?''', (quantity, user_id, item_id))
-
-def get_player_inventory(user_id):
-    with Database() as c:
-        c.execute('''SELECT items.item_id, items.name, items.description, items.rarity, 
-                  items.image_url, inventory.quantity, items.value
-                  FROM inventory 
-                  JOIN items ON inventory.item_id = items.item_id 
-                  WHERE user_id = ?''', (user_id,))
-        return c.fetchall()
 
 # Dungeon operations
 def start_dungeon(user_id, stamina_used, tier):
@@ -326,7 +281,7 @@ def complete_dungeons(bot):
 def calculate_level(xp):
     BASE_XP = 100
     XP_MULTIPLIER = 1.5
-    return max(1, int(math.log(max(1, xp / BASE_XP), XP_MULTIPLIER) + 1)
+    return max(1, int(math.log(max(1, xp / BASE_XP), XP_MULTIPLIER) + 1))
 
 def get_level_tier(level):
     if level < 5: return "beginner"

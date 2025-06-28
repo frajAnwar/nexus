@@ -1,28 +1,21 @@
-# main.py - Entry point for the bot
+# main.py - Bot entry point
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import database
 import random
-import asyncio
 import os
 import configparser
-from datetime import datetime, timedelta
-from typing import List, Optional
-from utils.views import DashboardView, MarketplaceView, DungeonView, AdminDashboardView
-from utils.helpers import is_rpg_admin, calculate_level, get_level_xp, get_level_tier
+from datetime import datetime
+from utils import views, helpers
+from flask import Flask
+from threading import Thread
 
 # Load configuration
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-# Bot setup
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# Constants from config
+# Get constants from config
 ADMIN_ROLE = config['GAME']['admin_role']
 PLAYER_ROLE = config['GAME']['player_role']
 CHANNEL_REGISTRATION = config['GAME']['registration_channel']
@@ -30,8 +23,7 @@ CHANNEL_LEVELING = config['GAME']['leveling_channel']
 CHANNEL_DUNGEON = config['GAME']['dungeon_channel']
 CHANNEL_MARKETPLACE = config['GAME']['marketplace_channel']
 CHANNEL_ADMIN = config['GAME']['admin_channel']
-LOG_CHANNEL_ID = int(config['GAME']['log_channel'])
-BOT_TOKEN = config['GAME']['token']
+BOT_TOKEN = os.getenv('BOT_TOKEN') or config['GAME']['token']
 BASE_XP = int(config['GAME']['base_xp'])
 XP_MULTIPLIER = float(config['GAME']['xp_multiplier'])
 LEVEL_COIN_REWARD = int(config['GAME']['level_coin_reward'])
@@ -41,43 +33,24 @@ MESSAGE_XP_MIN = int(config['GAME']['message_xp_min'])
 MESSAGE_XP_MAX = int(config['GAME']['message_xp_max'])
 MAX_STAMINA = int(config['GAME']['max_stamina'])
 CURRENCY_ICON = config['GAME']['currency_icon']
-CURRENCY_NAME = config['GAME']['currency_name']
 
-# Pixel art assets from config
-PIXEL_ASSETS = {
-    "logo": config['ASSETS']['logo'],
-    "hero": config['ASSETS']['hero'],
-    "dungeon": config['ASSETS']['dungeon'],
-    "sword": config['ASSETS']['sword'],
-    "shield": config['ASSETS']['shield'],
-    "potion": config['ASSETS']['potion'],
-    "chest": config['ASSETS']['chest'],
-    "dragon": config['ASSETS']['dragon'],
-    "coin": config['ASSETS']['coin'],
-    "xp": config['ASSETS']['xp'],
-    "shop": config['ASSETS']['shop'],
-    "mystery": config['ASSETS']['mystery']
-}
+# Initialize bot
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Rarity data with colors and emojis
-RARITY_DATA = {
-    "common": {"color": 0x808080, "emoji": "⚪", "weight": 60},
-    "uncommon": {"color": 0x00ff00, "emoji": "🟢", "weight": 25},
-    "rare": {"color": 0x0080ff, "emoji": "🔵", "weight": 10},
-    "epic": {"color": 0x8000ff, "emoji": "🟣", "weight": 4},
-    "legendary": {"color": 0xffa500, "emoji": "🟠", "weight": 1}
-}
-
-# Tier colors for profile display
-TIER_COLORS = {
-    "beginner": 0x808080,
-    "apprentice": 0x00ff00,
-    "journeyman": 0x0080ff,
-    "adept": 0x8000ff,
-    "expert": 0xffd700,
-    "master": 0xffa500,
-    "grandmaster": 0xff0000
-}
+# Keep-alive server
+app = Flask('')
+@app.route('/')
+def home():
+    return "Bot is alive!"
+def run():
+    app.run(host='0.0.0.0', port=8080)
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+keep_alive()
 
 # Background tasks
 @tasks.loop(minutes=1)
@@ -88,11 +61,6 @@ async def stamina_regeneration():
 async def dungeon_completion():
     database.complete_dungeons(bot)
 
-@tasks.loop(minutes=1)
-async def shop_restock():
-    database.restock_shop()
-
-# Bot events
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
@@ -107,11 +75,10 @@ async def on_ready():
     # Start background tasks
     stamina_regeneration.start()
     dungeon_completion.start()
-    shop_restock.start()
     
     # Create interface messages
     for guild in bot.guilds:
-        await create_interface_messages(guild)
+        await helpers.create_interface_messages(bot, guild, config)
 
 @bot.event
 async def on_message(message):
@@ -139,7 +106,7 @@ async def on_message(message):
                     database.add_item_to_inventory(message.author.id, item_id)
                     item = database.get_item(item_id)
                     await message.channel.send(
-                        f"{message.author.mention} found a {RARITY_DATA[item['rarity']]['emoji']} **{item['name']}** while exploring!"
+                        f"{message.author.mention} found a {helpers.get_rarity_emoji(item['rarity'])} **{item['name']}** while exploring!"
                     )
     except Exception as e:
         print(f"on_message error: {e}")
@@ -155,12 +122,11 @@ async def dashboard(interaction: discord.Interaction):
         description="Navigate your adventure with the buttons below",
         color=0x3498db
     )
-    embed.set_thumbnail(url=PIXEL_ASSETS["logo"])
-    view = DashboardView()
+    embed.set_thumbnail(url=helpers.get_asset("logo"))
+    view = views.DashboardView()
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="register", description="Register as an adventurer")
-@app_commands.checks.has_channel_named(CHANNEL_REGISTRATION)
 async def register(interaction: discord.Interaction):
     """Register a new player"""
     database.create_player(interaction.user.id, interaction.user.name)
@@ -197,8 +163,8 @@ async def admin_dashboard(interaction: discord.Interaction):
         description="Manage the RPG system",
         color=0x3498db
     )
-    embed.set_thumbnail(url=PIXEL_ASSETS["logo"])
-    view = AdminDashboardView()
+    embed.set_thumbnail(url=helpers.get_asset("logo"))
+    view = views.AdminDashboardView()
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="add_item", description="Add a new item to the game")
@@ -225,77 +191,7 @@ async def admin_add_item(
     embed.set_thumbnail(url=image_url)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# Helper functions
-async def create_interface_messages(guild):
-    """Create interface messages in each channel"""
-    # Registration channel
-    reg_channel = discord.utils.get(guild.channels, name=CHANNEL_REGISTRATION)
-    if reg_channel:
-        await reg_channel.purge()
-        embed = discord.Embed(
-            title="🌟 Welcome to Pixel RPG!",
-            description="Begin your adventure by registering below",
-            color=0x3498db
-        )
-        embed.set_thumbnail(url=PIXEL_ASSETS["hero"])
-        embed.add_field(name="How to Start", value="Use the `/register` command to create your character", inline=False)
-        embed.add_field(name="Features", value="• Character progression\n• Dungeon exploration\n• Player marketplace", inline=False)
-        await reg_channel.send(embed=embed)
-    
-    # Leveling channel
-    level_channel = discord.utils.get(guild.channels, name=CHANNEL_LEVELING)
-    if level_channel:
-        await level_channel.purge()
-        embed = discord.Embed(
-            title="📈 Leveling System",
-            description="Gain XP and level up your character",
-            color=0x3498db
-        )
-        embed.set_thumbnail(url=PIXEL_ASSETS["xp"])
-        embed.add_field(name="How it Works", value="• Send messages to gain XP\n• Complete dungeons for rewards\n• Higher levels unlock better content", inline=False)
-        await level_channel.send(embed=embed)
-    
-    # Dungeon channel
-    dungeon_channel = discord.utils.get(guild.channels, name=CHANNEL_DUNGEON)
-    if dungeon_channel:
-        await dungeon_channel.purge()
-        embed = discord.Embed(
-            title="🏰 Dungeon Expeditions",
-            description="Embark on dangerous adventures to earn rewards",
-            color=0x8B4513
-        )
-        embed.set_thumbnail(url=PIXEL_ASSETS["dungeon"])
-        embed.add_field(name="How it Works", value="• Use stamina to start expeditions\n• Higher risk = greater rewards\n• Discover rare items", inline=False)
-        await dungeon_channel.send(embed=embed)
-    
-    # Marketplace channel
-    market_channel = discord.utils.get(guild.channels, name=CHANNEL_MARKETPLACE)
-    if market_channel:
-        await market_channel.purge()
-        embed = discord.Embed(
-            title="🛒 RPG Marketplace",
-            description="Buy, sell, and trade items with other players",
-            color=0x3498db
-        )
-        embed.set_thumbnail(url=PIXEL_ASSETS["shop"])
-        embed.add_field(name="Sections", value="• Global Shop\n• Player Marketplace\n• Mystery Boxes", inline=False)
-        view = MarketplaceView()
-        await market_channel.send(embed=embed, view=view)
-    
-    # Admin channel
-    admin_channel = discord.utils.get(guild.channels, name=CHANNEL_ADMIN)
-    if admin_channel:
-        await admin_channel.purge()
-        embed = discord.Embed(
-            title="🛠️ RPG Admin Dashboard",
-            description="Manage all aspects of the RPG system",
-            color=0x3498db
-        )
-        embed.set_thumbnail(url=PIXEL_ASSETS["logo"])
-        embed.add_field(name="Sections", value="• Items Database\n• Player Management\n• Economy Controls", inline=False)
-        view = AdminDashboardView()
-        await admin_channel.send(embed=embed, view=view)
-
+# Run the bot
 if __name__ == "__main__":
     database.initialize_database()
     bot.run(BOT_TOKEN)

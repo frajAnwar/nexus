@@ -1,0 +1,7 @@
+# .gitignore - Files to ignore in Git
+.env
+__pycache__/
+*.pyc
+*.db
+*.log
+secrets/
